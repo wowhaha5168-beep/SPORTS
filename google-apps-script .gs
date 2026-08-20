@@ -1,0 +1,352 @@
+// ======================================================
+// 員工運動報名系統 - Google Apps Script v2
+// 格式：每個運動獨立工作表，場次橫向排列
+// ======================================================
+
+const SHEET_ID = "1VqSECXOB15jpura28xAmtBSQefQO5OX60pVJSrsIIaU";
+
+const SPORT_CONFIG = {
+  yoga: {
+    label: "瑜伽", sheetName: "瑜伽",
+    sessions: (year, month) => {
+      const days = []; const names = ["日","一","二","三","四","五","六"];
+      const dim = new Date(year, month, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const day = new Date(year, month - 1, d).getDay();
+        const dd = `${month}/${String(d).padStart(2,"0")}`;
+        if (day === 3) days.push({ id: `yoga-${d}-1730`, label: `${dd}（${names[day]}）17:30～18:30` });
+        if (day === 5) days.push({ id: `yoga-${d}-1030`, label: `${dd}（${names[day]}）10:30～11:30` });
+      }
+      return days;
+    }
+  },
+  badminton: {
+    label: "羽球", sheetName: "羽球",
+    sessions: (year, month) => {
+      const days = []; const names = ["日","一","二","三","四","五","六"];
+      const dim = new Date(year, month, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const day = new Date(year, month - 1, d).getDay();
+        const dd = `${month}/${String(d).padStart(2,"0")}`;
+        if (day === 2) {
+          days.push({ id: `badminton-${d}-0900`, label: `${dd}（${names[day]}）09:00～11:00` });
+          days.push({ id: `badminton-${d}-1700`, label: `${dd}（${names[day]}）17:00～19:00` });
+        }
+      }
+      return days;
+    }
+  },
+  tennis: {
+    label: "網球", sheetName: "網球",
+    sessions: (year, month) => {
+      const days = []; const names = ["日","一","二","三","四","五","六"];
+      const dim = new Date(year, month, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const day = new Date(year, month - 1, d).getDay();
+        const dd = `${month}/${String(d).padStart(2,"0")}`;
+        if (day === 3) days.push({ id: `tennis-${d}-1900`, label: `${dd}（${names[day]}）19:00～21:00` });
+      }
+      return days;
+    }
+  }
+};
+
+const SPORTS = ["yoga", "badminton", "tennis"];
+const CAPACITIES = { yoga_wed: 20, yoga_fri: 15, badminton: 16, tennis: 10 };
+
+function doPost(e) {
+  try {
+    let data;
+    if (e.postData && e.postData.contents) {
+      data = JSON.parse(e.postData.contents);
+    } else if (e.parameter && e.parameter.data) {
+      data = JSON.parse(e.parameter.data);
+    } else {
+      return res({ error: "No data received" });
+    }
+    return handleAction(data);
+  } catch (err) {
+    return res({ error: err.message });
+  }
+}
+
+function doGet(e) {
+  try {
+    let result = { status: "ok" };
+    if (e.parameter && e.parameter.data) {
+      const data = JSON.parse(e.parameter.data);
+      const output = handleAction(data);
+      const json = output.getContent();
+      result = JSON.parse(json);
+    }
+    // JSONP support
+    if (e.parameter && e.parameter.callback) {
+      return ContentService
+        .createTextOutput(`${e.parameter.callback}(${JSON.stringify(result)})`)
+        .setMimeType(ContentService.MimeType.JAVASCRIPT);
+    }
+    return res(result);
+  } catch (err) {
+    return res({ error: err.message });
+  }
+}
+
+function handleAction(data) {
+  const action = data.action;
+  if (action === "addReg")    return addReg(data);
+  if (action === "updateReg") return updateReg(data);
+  if (action === "deleteReg") return deleteReg(data);
+  if (action === "getRegs")   return getRegs(data);
+  if (action === "getPassword")  return getPassword();
+  if (action === "savePassword") return savePassword(data.password);
+  return res({ error: "Unknown action" });
+}
+
+// ── 取得密碼 ──
+function getPassword() {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  let sheet = ss.getSheetByName("設定");
+  if (!sheet) {
+    sheet = ss.insertSheet("設定");
+    sheet.getRange(1, 1).setValue("admin_password");
+    sheet.getRange(1, 2).setValue("admin123");
+  }
+  const pw = sheet.getRange(1, 2).getValue();
+  return res({ password: pw || "admin123" });
+}
+
+// ── 儲存密碼 ──
+function savePassword(password) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  let sheet = ss.getSheetByName("設定");
+  if (!sheet) {
+    sheet = ss.insertSheet("設定");
+    sheet.getRange(1, 1).setValue("admin_password");
+  }
+  sheet.getRange(1, 2).setValue(password);
+  return res({ success: true });
+}
+
+// ── 取得報名資料（從總表）──
+function getRegs(data) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheetName = `${data.year}年${data.month}月總表`;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return res({ regs: [] });
+
+  const rows = sheet.getDataRange().getValues();
+  if (rows.length <= 1) return res({ regs: [] });
+
+  const headers = rows[0];
+  const regs = rows.slice(1).filter(r => r[0] !== "").map(row => {
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = row[i]);
+    return obj;
+  });
+  return res({ regs });
+}
+
+// ── 新增報名 ──
+function addReg(data) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const year = data.year;
+  const month = data.month;
+
+  // 確保所有工作表存在
+  ensureAllSheets(ss, year, month);
+
+  // 寫入總表
+  const summarySheet = ss.getSheetByName(`${year}年${month}月總表`);
+  const rows = summarySheet.getDataRange().getValues();
+  const nameCol = rows[0].indexOf("姓名");
+
+  // 檢查重複
+  if (rows.slice(1).some(r => r[nameCol] === data.name)) {
+    return res({ error: "此姓名本月已報名" });
+  }
+
+  const id = new Date().getTime().toString();
+  const now = Utilities.formatDate(new Date(), "Asia/Taipei", "yyyy/MM/dd HH:mm");
+
+  summarySheet.appendRow([
+    id, data.name, data.phone, data.department,
+    (data.yoga || []).join("、"),
+    (data.badminton || []).join("、"),
+    (data.tennis || []).join("、"),
+    now
+  ]);
+
+  // 寫入各運動工作表
+  SPORTS.forEach(sport => {
+    const cfg = SPORT_CONFIG[sport];
+    const sportSheet = ss.getSheetByName(`${year}年${month}月${cfg.sheetName}`);
+    const selected = data[sport] || [];
+    const noneId = `${sport}-none`;
+    if (selected.includes(noneId) || selected.length === 0) return;
+
+    const sessions = cfg.sessions(year, month);
+    // 找到各場次的欄位位置
+    const headerRow1 = sportSheet.getRange(1, 1, 1, sportSheet.getLastColumn()).getValues()[0];
+
+    selected.forEach(sessionId => {
+      const session = sessions.find(s => s.id === sessionId);
+      if (!session) return;
+
+      // 找到這個場次的起始欄
+      let startCol = -1;
+      for (let c = 0; c < headerRow1.length; c++) {
+        if (headerRow1[c] === session.label) { startCol = c + 1; break; }
+      }
+      if (startCol === -1) return;
+
+      // 找空行填入
+      const colData = sportSheet.getRange(3, startCol, 50, 1).getValues();
+      let emptyRow = -1;
+      for (let r = 0; r < colData.length; r++) {
+        if (colData[r][0] === "") { emptyRow = r + 3; break; }
+      }
+      if (emptyRow === -1) return;
+
+      sportSheet.getRange(emptyRow, startCol).setValue(data.name);
+      sportSheet.getRange(emptyRow, startCol + 1).setValue(data.phone);
+      sportSheet.getRange(emptyRow, startCol + 2).setValue(data.department);
+    });
+  });
+
+  return res({ success: true, id });
+}
+
+// ── 更新報名 ──
+function updateReg(data) {
+  // 先刪除舊資料再新增
+  deleteReg({ id: data.id, year: data.year, month: data.month });
+  data.action = "addReg";
+  return addReg(data);
+}
+
+// ── 刪除報名 ──
+function deleteReg(data) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const year = data.year;
+  const month = data.month;
+
+  // 從總表找姓名
+  const summarySheet = ss.getSheetByName(`${year}年${month}月總表`);
+  if (!summarySheet) return res({ error: "找不到工作表" });
+
+  const rows = summarySheet.getDataRange().getValues();
+  const idCol = rows[0].indexOf("ID");
+  const nameCol = rows[0].indexOf("姓名");
+  let targetName = "";
+
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i][idCol] == data.id) {
+      targetName = rows[i][nameCol];
+      summarySheet.deleteRow(i + 1);
+      break;
+    }
+  }
+
+  if (!targetName) return res({ error: "找不到此筆資料" });
+
+  // 從各運動工作表刪除
+  SPORTS.forEach(sport => {
+    const cfg = SPORT_CONFIG[sport];
+    const sportSheet = ss.getSheetByName(`${year}年${month}月${cfg.sheetName}`);
+    if (!sportSheet) return;
+
+    const lastCol = sportSheet.getLastColumn();
+    const lastRow = sportSheet.getLastRow();
+    if (lastRow < 3) return;
+
+    const allData = sportSheet.getRange(3, 1, lastRow - 2, lastCol).getValues();
+    for (let r = 0; r < allData.length; r++) {
+      for (let c = 0; c < allData[r].length; c++) {
+        if (allData[r][c] === targetName) {
+          sportSheet.getRange(r + 3, c + 1).setValue("");
+          sportSheet.getRange(r + 3, c + 2).setValue("");
+          sportSheet.getRange(r + 3, c + 3).setValue("");
+        }
+      }
+    }
+  });
+
+  return res({ success: true });
+}
+
+// ── 建立所有工作表 ──
+function ensureAllSheets(ss, year, month) {
+  // 總表
+  const summaryName = `${year}年${month}月總表`;
+  if (!ss.getSheetByName(summaryName)) {
+    const s = ss.insertSheet(summaryName);
+    s.appendRow(["ID", "姓名", "手機", "部門", "瑜伽", "羽球", "網球", "報名時間"]);
+    formatHeader(s, 1, 8, "#1D4ED8");
+    s.setFrozenRows(1);
+  }
+
+  // 各運動工作表
+  SPORTS.forEach(sport => {
+    const cfg = SPORT_CONFIG[sport];
+    const sheetName = `${year}年${month}月${cfg.sheetName}`;
+    if (!ss.getSheetByName(sheetName)) {
+      const s = ss.insertSheet(sheetName);
+      buildSportSheet(s, cfg, year, month, sport);
+    }
+  });
+}
+
+function buildSportSheet(sheet, cfg, year, month, sport) {
+  const sessions = cfg.sessions(year, month);
+  if (sessions.length === 0) return;
+
+  const colors = { yoga: "#7C3AED", badminton: "#059669", tennis: "#D97706" };
+  const color = colors[sport] || "#1D4ED8";
+
+  // 第一行：場次標題（每場佔3欄）
+  // 第二行：匿稱、行動電話、部門
+  let col = 1;
+  sessions.forEach(session => {
+    // 合併第一行的3欄作為場次標題
+    sheet.getRange(1, col, 1, 3).merge();
+    sheet.getRange(1, col).setValue(session.label);
+    sheet.getRange(1, col, 1, 3).setBackground(color).setFontColor("#ffffff")
+      .setFontWeight("bold").setHorizontalAlignment("center");
+
+    // 第二行子標題
+    sheet.getRange(2, col).setValue("匿稱");
+    sheet.getRange(2, col + 1).setValue("行動電話");
+    sheet.getRange(2, col + 2).setValue("部門");
+    sheet.getRange(2, col, 1, 3).setBackground("#E8F0FE").setFontWeight("bold")
+      .setHorizontalAlignment("center");
+
+    // 設定欄寬
+    sheet.setColumnWidth(col, 80);
+    sheet.setColumnWidth(col + 1, 110);
+    sheet.setColumnWidth(col + 2, 70);
+
+    // 淡色背景區域
+    sheet.getRange(3, col, 30, 3).setBackground("#F8FAFC");
+
+    col += 3;
+  });
+
+  sheet.setFrozenRows(2);
+}
+
+function formatHeader(sheet, row, cols, color) {
+  const range = sheet.getRange(row, 1, 1, cols);
+  range.setBackground(color).setFontColor("#ffffff").setFontWeight("bold");
+  sheet.setFrozenRows(1);
+}
+
+function res(data) {
+  const output = ContentService
+    .createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+  return output;
+}
+
+function setCorsHeaders(output) {
+  return output;
+}

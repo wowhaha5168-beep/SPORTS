@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>員工運動報名系統</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #F0F4F8; font-family: 'Noto Sans TC','PingFang TC','Microsoft JhengHei',sans-serif; }
+  select, input, button { font-family: inherit; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+const DEPARTMENTS = ["仙", "風", "D", "J", "G", "軟"];
+const MONTHS = Array.from({ length: 12 }, (_, i) => ({ label: `${i + 1}月`, value: i + 1 }));
+const DEFAULT_PASSWORD = "admin123";
+
+const SPORT_CONFIG = {
+  yoga: {
+    key: "yoga", label: "瑜伽", icon: "🧘", color: "#7C3AED", light: "#F5F3FF",
+    venue: "舒活-瑜伽｜嘉義市維忠街12號",
+    noneLabel: "不參加瑜伽",
+    sessions: (year, month) => {
+      const days = []; const names = ["日","一","二","三","四","五","六"];
+      const dim = new Date(year, month, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const day = new Date(year, month - 1, d).getDay();
+        const dd = `${month}/${String(d).padStart(2,"0")}`;
+        if (day === 3) days.push({ id: `yoga-${d}-1730`, label: `${dd}（${names[day]}）17:30～18:30`, capacity: 20 });
+        if (day === 5) days.push({ id: `yoga-${d}-1030`, label: `${dd}（${names[day]}）10:30～11:30`, capacity: 15 });
+      }
+      return days;
+    },
+  },
+  badminton: {
+    key: "badminton", label: "羽球", icon: "🏸", color: "#059669", light: "#ECFDF5",
+    venue: "湖美健康羽球館｜嘉義市西區健康三路65號",
+    noneLabel: "不參加羽球",
+    sessions: (year, month) => {
+      const days = []; const names = ["日","一","二","三","四","五","六"];
+      const dim = new Date(year, month, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const day = new Date(year, month - 1, d).getDay();
+        const dd = `${month}/${String(d).padStart(2,"0")}`;
+        if (day === 2) {
+          days.push({ id: `badminton-${d}-0900`, label: `${dd}（${names[day]}）09:00～11:00`, capacity: 8 });
+          days.push({ id: `badminton-${d}-1700`, label: `${dd}（${names[day]}）17:00～19:00`, capacity: 20 });
+        }
+      }
+      return days;
+    },
+  },
+  tennis: {
+    key: "tennis", label: "網球", icon: "🎾", color: "#D97706", light: "#FFFBEB",
+    venue: "國民運動中心旁網球硬地球場（旁邊是停車場）",
+    noneLabel: "不參加網球",
+    sessions: (year, month) => {
+      const days = []; const names = ["日","一","二","三","四","五","六"];
+      const dim = new Date(year, month, 0).getDate();
+      for (let d = 1; d <= dim; d++) {
+        const day = new Date(year, month - 1, d).getDay();
+        const dd = `${month}/${String(d).padStart(2,"0")}`;
+        if (day === 3) days.push({ id: `tennis-${d}-1900`, label: `${dd}（${names[day]}）19:00～21:00`, capacity: 10 });
+      }
+      return days;
+    },
+  },
+};
+
+const SPORTS = ["yoga", "badminton", "tennis"];
+const C = {
+  bg: "#F0F4F8", card: "#FFFFFF", primary: "#1D4ED8", primaryLight: "#EFF6FF",
+  text: "#1E293B", muted: "#64748B", border: "#E2E8F0",
+  danger: "#DC2626", success: "#16A34A", warning: "#D97706",
+};
+
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzC6fGkhKJQc2V7FdKUi-J_ap5TjRX5aVftUjDKLBCkh_hBkRmaKiwFnwmtQfJQjIu1/exec";
+const PW_KEY = "sports_admin_pw";
+const MANUAL_CLOSED_KEY = "sports_manual_closed";
+
+// Google Sheet API 呼叫
+async function apiCall(payload) {
+  const readActions = ["getRegs", "getPassword"];
+  if (readActions.includes(payload.action)) {
+    // 讀取用 GET
+    try {
+      const params = new URLSearchParams({ data: JSON.stringify(payload) });
+      const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, {
+        method: "GET", redirect: "follow",
+      });
+      const text = await res.text();
+      return JSON.parse(text);
+    } catch(e) { return {}; }
+  } else {
+    // 寫入用 no-cors POST（不會有回傳值但資料會寫入）
+    try {
+      const params = new URLSearchParams({ data: JSON.stringify(payload) });
+      const res = await fetch(`${SCRIPT_URL}?${params.toString()}`, {
+        method: "GET", redirect: "follow",
+      });
+      const text = await res.text();
+      return JSON.parse(text);
+    } catch(e) {
+      await fetch(SCRIPT_URL, {
+        method: "POST", mode: "no-cors",
+        body: JSON.stringify(payload),
+      });
+      return { success: true };
+    }
+  }
+}
+
+function loadManualClosed() { try { return JSON.parse(localStorage.getItem(MANUAL_CLOSED_KEY) || "[]"); } catch { return []; } }
+function saveManualClosed(data) { try { localStorage.setItem(MANUAL_CLOSED_KEY, JSON.stringify(data)); } catch {} }
+
+// 密碼從 Google Sheet 讀取/儲存
+async function loadPasswordFromSheet() {
+  try {
+    const result = await apiCall({ action: "getPassword" });
+    return result.password || DEFAULT_PASSWORD;
+  } catch { return DEFAULT_PASSWORD; }
+}
+async function savePasswordToSheet(pw) {
+  try { await apiCall({ action: "savePassword", password: pw }); } catch {}
+}
+
+// 核心邏輯：當月20號12:00開放下個月報名，25號23:59截止
+function getAutoOpenMonths(now) {
+  const open = [];
+  const y = now.getFullYear();
+  const m = now.getMonth() + 1;
+  const openTime  = new Date(y, m - 1, 20, 12, 0, 0).getTime();
+  const closeTime = new Date(y, m - 1, 25, 23, 59, 59).getTime();
+  const nowTime   = now.getTime();
+  if (nowTime >= openTime && nowTime <= closeTime) {
+    let nextM = m + 1; let nextY = y;
+    if (nextM > 12) { nextM = 1; nextY++; }
+    open.push({ year: nextY, month: nextM });
+  }
+  return open;
+}
+
+function getCountdownInfo(now) {
+  const y = now.getFullYear();
+  const m = now.getMonth() + 1;
+  const openTime  = new Date(y, m - 1, 20, 12, 0, 0).getTime();
+  const closeTime = new Date(y, m - 1, 25, 23, 59, 59).getTime();
+  const nowTime   = now.getTime();
+  let nextM = m + 1; let nextY = y;
+  if (nextM > 12) { nextM = 1; nextY++; }
+
+  if (nowTime < openTime) {
+    const diff = openTime - nowTime;
+    const days = Math.floor(diff / 86400000);
+    const hrs  = Math.floor((diff % 86400000) / 3600000);
+    const mins = Math.floor((diff % 3600000) / 60000);
+    return { type: "pending", text: `距離 ${y}年${m}月20日 12:00 開放 ${nextY}年${nextM}月報名，還有 ${days}天 ${hrs}小時 ${mins}分鐘` };
+  } else if (nowTime <= closeTime) {
+    const diff = closeTime - nowTime;
+    const days = Math.floor(diff / 86400000);
+    const hrs  = Math.floor((diff % 86400000) / 3600000);
+    const mins = Math.floor((diff % 3600000) / 60000);
+    return { type: "open", text: `${nextY}年${nextM}月 報名開放中！截止倒數：${days}天 ${hrs}小時 ${mins}分鐘（${y}年${m}月25日 23:59）` };
+  } else {
+    let nm = m + 1; let ny = y; if (nm > 12) { nm = 1; ny++; }
+    const nextOpen = new Date(ny, nm - 1, 20, 12, 0, 0).getTime();
+    const diff = nextOpen - nowTime;
+    const days = Math.floor(diff / 86400000);
+    const hrs  = Math.floor((diff % 86400000) / 3600000);
+    const mins = Math.floor((diff % 3600000) / 60000);
+    let nn = nm + 1; let nny = ny; if (nn > 12) { nn = 1; nny++; }
+    return { type: "closed", text: `本期報名已截止。距離下次開放 ${nny}年${nn}月報名，還有 ${days}天 ${hrs}小時 ${mins}分鐘` };
+  }
+}
+
+function emptyForm() {
+  return { name: "", phone: "", department: "", yoga: [], badminton: [], tennis: [] };
+}
+
+const inputSt = (err) => ({
+  width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 8,
+  border: `1.5px solid ${err ? C.danger : C.border}`, fontSize: 14, outline: "none",
+  fontFamily: "inherit", background: "#fff",
+});
+
+function App() {
+  const today = new Date();
+  const [tab, setTab] = useState("register");
+  const [regs, setRegs] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [successData, setSuccessData] = useState(null);
+  const [manualClosed, setManualClosed] = useState(loadManualClosed);
+
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [form, setForm] = useState(emptyForm());
+  const [errors, setErrors] = useState({});
+  const [toast, setToast] = useState(null);
+  const [editId, setEditId] = useState(null);
+
+  const [filterYear, setFilterYear] = useState(today.getFullYear());
+  const [filterMonth, setFilterMonth] = useState(today.getMonth() + 1);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  const [queryName, setQueryName] = useState("");
+  const [queryDept, setQueryDept] = useState("");
+  const [queryResult, setQueryResult] = useState(null);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState("");
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState("");
+  const [sheetPassword, setSheetPassword] = useState(DEFAULT_PASSWORD);
+
+  // 載入密碼從 Google Sheet
+  useEffect(() => {
+    loadPasswordFromSheet().then(pw => setSheetPassword(pw));
+  }, []);
+  const [showChangePw, setShowChangePw] = useState(false);
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [changePwError, setChangePwError] = useState("");
+  const [adminTab, setAdminTab] = useState("status");
+
+  const [statsFilterYear, setStatsFilterYear] = useState(today.getFullYear());
+  const [statsFilterMonth, setStatsFilterMonth] = useState(today.getMonth() + 1);
+
+  // 模擬日期（管理員測試用）
+  const [simDay, setSimDay] = useState(today.getDate());
+  const [simMonth, setSimMonth] = useState(today.getMonth() + 1);
+  const [simYear, setSimYear] = useState(today.getFullYear());
+  const [simHour, setSimHour] = useState(today.getHours());
+  const [simMin, setSimMin] = useState(today.getMinutes());
+
+  // 真實時間自動更新（每分鐘）
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // 管理員模擬時用simDate，一般用戶用真實時間
+  const effectiveDate = adminUnlocked
+    ? new Date(simYear, simMonth - 1, simDay, simHour, simMin, 0)
+    : now;
+
+  const autoOpenMonths = getAutoOpenMonths(effectiveDate);
+  const openMonths = autoOpenMonths.filter(m => !manualClosed.includes(`${m.year}-${m.month}`));
+  const countdown = getCountdownInfo(effectiveDate);
+
+  useEffect(() => { saveManualClosed(manualClosed); }, [manualClosed]);
+  useEffect(() => { if (tab === "register" && !adminUnlocked) { setPwInput(""); setPwError(""); } }, [tab]);
+
+  // 載入 Google Sheet 資料
+  async function loadRegsFromSheet(year, month) {
+    try {
+      const result = await apiCall({ action: "getRegs", year, month });
+      if (result.regs) {
+        const parsed = result.regs.map(r => ({
+          id: r["ID"], name: r["姓名"], phone: r["手機"], department: r["部門"],
+          yoga: r["瑜伽"] ? r["瑜伽"].split("、") : [],
+          badminton: r["羽球"] ? r["羽球"].split("、") : [],
+          tennis: r["網球"] ? r["網球"].split("、") : [],
+          createdAt: r["報名時間"], year, month,
+        }));
+        setRegs(parsed);
+      }
+    } catch(e) {
+      // 載入失敗不影響報名，靜默處理
+      console.log("載入資料失敗", e);
+    }
+  }
+
+  useEffect(() => {
+    if (tab === "register" && !editId) {
+      if (openMonths.length > 0 && !selectedKey) {
+        const first = openMonths[0];
+        setSelectedKey(`${first.year}-${first.month}`);
+        loadRegsFromSheet(first.year, first.month);
+      }
+      if (openMonths.length > 0 && selectedKey) {
+        const stillOpen = openMonths.find(m => `${m.year}-${m.month}` === selectedKey);
+        if (!stillOpen) {
+          setSelectedKey(`${openMonths[0].year}-${openMonths[0].month}`);
+          loadRegsFromSheet(openMonths[0].year, openMonths[0].month);
+        }
+      }
+    }
+  }, [tab, openMonths.length]);
+
+  // 切換月份時重新載入
+  useEffect(() => {
+    if (selectedKey) {
+      const [y, m] = selectedKey.split("-").map(Number);
+      loadRegsFromSheet(y, m);
+    }
+  }, [selectedKey]);
+
+  // 管理員切換到紀錄分頁時載入
+  useEffect(() => {
+    if (adminTab === "records") {
+      loadRegsFromSheet(filterYear, filterMonth);
+    }
+    if (adminTab === "stats") {
+      loadRegsFromSheet(statsFilterYear, statsFilterMonth);
+    }
+  }, [adminTab, filterYear, filterMonth, statsFilterYear, statsFilterMonth]);
+
+  const activeYear  = selectedKey ? parseInt(selectedKey.split("-")[0]) : effectiveDate.getFullYear();
+  const activeMonth = selectedKey ? parseInt(selectedKey.split("-")[1]) : effectiveDate.getMonth() + 1;
+
+  function getSessions(sport) { return SPORT_CONFIG[sport].sessions(activeYear, activeMonth); }
+  function getCount(sessionId) {
+    return regs.filter(r => r.month === activeMonth && r.year === activeYear &&
+      SPORTS.some(s => r[s] && r[s].includes(sessionId))).length;
+  }
+  function toggleSession(sport, id) {
+    setForm(prev => {
+      const cur = prev[sport] || [];
+      return { ...prev, [sport]: cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id] };
+    });
+  }
+  function validate() {
+    const e = {};
+    if (!String(form.name || "").trim()) e.name = "請填寫姓名";
+    if (!String(form.phone || "").trim()) e.phone = "請填寫手機";
+    if (!form.department) e.department = "請選擇部門";
+    // 至少要選一個運動
+    const hasAny = SPORTS.some(s => form[s] && form[s].length > 0);
+    if (!hasAny) e.general = "請至少選擇一項運動場次";
+    setErrors(e); return !Object.keys(e).length;
+  }
+  async function submitForm() {
+    if (!validate()) return;
+    setLoading(true);
+    try {
+      if (editId) {
+        const result = await apiCall({ action: "updateReg", id: editId, ...form, year: activeYear, month: activeMonth });
+        if (result.error) { showToast(result.error, "error"); setLoading(false); return; }
+        showToast("已更新報名資料 ✓"); setEditId(null);
+      } else {
+        const result = await apiCall({ action: "addReg", ...form, name: form.name.trim(), year: activeYear, month: activeMonth });
+        if (result.error) { showToast(result.error, "error"); setLoading(false); return; }
+        showToast("報名成功！✓");
+        setSuccessData({ ...form, year: activeYear, month: activeMonth });
+      }
+      await loadRegsFromSheet(activeYear, activeMonth);
+      setForm(emptyForm()); setErrors({});
+    } catch(e) { showToast("送出失敗，請重試", "error"); }
+    setLoading(false);
+  }
+  function showToast(msg, type = "success") {
+    setToast({ msg, type }); setTimeout(() => setToast(null), 3500);
+  }
+  function startEdit(r) {
+    setForm({ name: String(r.name || ""), phone: String(r.phone || ""), department: r.department, yoga: r.yoga || [], badminton: r.badminton || [], tennis: r.tennis || [] });
+    setSelectedKey(`${r.year}-${r.month}`); setEditId(r.id); setTab("register"); window.scrollTo(0, 0);
+  }
+  async function deleteReg(id, year, month) {
+    setLoading(true);
+    const y = year || filterYear;
+    const m = month || filterMonth;
+    try {
+      const result = await apiCall({ action: "deleteReg", id, year: y, month: m });
+      if (result.error) { showToast(result.error, "error"); setLoading(false); return; }
+      await loadRegsFromSheet(y, m);
+      setConfirmDelete(null); showToast("已刪除報名", "error");
+    } catch(e) { showToast("刪除失敗", "error"); }
+    setLoading(false);
+  }
+  async function handleQuery() {
+    if (!queryName.trim()) { setQueryError("請輸入姓名"); return; }
+    if (!queryDept) { setQueryError("請選擇部門"); return; }
+    setQueryLoading(true); setQueryResult(null); setQueryError("");
+    try {
+      const target = openMonths.length > 0 ? openMonths[0] : { year: effectiveDate.getFullYear(), month: effectiveDate.getMonth() + 1 };
+      const result = await apiCall({ action: "getRegs", year: target.year, month: target.month });
+      if (result.regs) {
+        const parsed = result.regs.map(r => ({
+          id: r["ID"], name: r["姓名"], phone: r["手機"], department: r["部門"],
+          yoga: r["瑜伽"] ? r["瑜伽"].split("、").filter(x => x) : [],
+          badminton: r["羽球"] ? r["羽球"].split("、").filter(x => x) : [],
+          tennis: r["網球"] ? r["網球"].split("、").filter(x => x) : [],
+          createdAt: r["報名時間"], year: target.year, month: target.month,
+        }));
+        const found = parsed.find(r => r.name === queryName.trim() && r.department === queryDept);
+        if (found) { setQueryResult(found); }
+        else { setQueryError("找不到符合的報名紀錄，請確認姓名與部門是否正確"); }
+      }
+    } catch(e) { setQueryError("查詢失敗，請稍後再試"); }
+    setQueryLoading(false);
+  }
+  function handleUnlock() {
+    if (pwInput === sheetPassword) { setAdminUnlocked(true); setPwError(""); setPwInput(""); }
+    else { setPwError("密碼錯誤，請重新輸入"); }
+  }
+  async function handleChangePw() {
+    if (!newPw.trim()) { setChangePwError("新密碼不能為空白"); return; }
+    if (newPw.length < 4) { setChangePwError("密碼至少需要4個字元"); return; }
+    if (newPw !== confirmPw) { setChangePwError("兩次密碼不一致"); return; }
+    await savePasswordToSheet(newPw);
+    setSheetPassword(newPw);
+    setNewPw(""); setConfirmPw(""); setChangePwError(""); setShowChangePw(false); showToast("密碼已更新 ✓");
+  }
+  function toggleManualClose(year, month) {
+    const key = `${year}-${month}`;
+    const isAutoOpen = autoOpenMonths.find(m => m.year === year && m.month === month);
+    if (!isAutoOpen) return;
+    setManualClosed(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  }
+
+  const filteredRegs = regs.filter(r => r.month === filterMonth && r.year === filterYear);
+  const statsRegs = regs.filter(r => r.month === statsFilterMonth && r.year === statsFilterYear);
+
+  return (
+    <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
+      {toast && (
+        <div style={{ position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)",
+          background: toast.type === "error" ? C.danger : C.success,
+          color: "#fff", padding: "10px 24px", borderRadius: 8, fontWeight: 700, fontSize: 14,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.18)", whiteSpace: "nowrap", zIndex: 9999 }}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* 報名成功確認卡片 */}
+      {successData && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
+          alignItems: "center", justifyContent: "center", zIndex: 9998, padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 420,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.2)", overflow: "hidden" }}>
+            {/* 標題 */}
+            <div style={{ background: `linear-gradient(135deg, ${C.primary}, #1E40AF)`, padding: "20px 24px", textAlign: "center" }}>
+              <div style={{ fontSize: 48, marginBottom: 8 }}>✅</div>
+              <div style={{ color: "#fff", fontWeight: 800, fontSize: 20 }}>報名成功！</div>
+              <div style={{ color: "rgba(255,255,255,0.8)", fontSize: 13, marginTop: 4 }}>
+                {successData.year}年{successData.month}月 運動報名表
+              </div>
+            </div>
+            {/* 內容 */}
+            <div style={{ padding: "0 0 16px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 15 }}>
+                <tbody>
+                  {[
+                    ["匿稱", successData.name],
+                    ["行動電話", successData.phone],
+                    ["部門", successData.department],
+                  ].map(([label, value]) => (
+                    <tr key={label} style={{ borderBottom: "1px solid #E2E8F0" }}>
+                      <td style={{ padding: "14px 20px", color: C.muted, fontWeight: 600, width: "35%", background: "#F8FAFC" }}>{label}</td>
+                      <td style={{ padding: "14px 20px", fontWeight: 500 }}>{value}</td>
+                    </tr>
+                  ))}
+                  {SPORTS.map(sport => {
+                    const cfg = SPORT_CONFIG[sport];
+                    const sel = successData[sport] || [];
+                    const sessions = SPORT_CONFIG[sport].sessions(successData.year, successData.month);
+                    const labels = sel.map(id => { const s = sessions.find(x => x.id === id); return s ? s.label : id; });
+                    return (
+                      <tr key={sport} style={{ borderBottom: "1px solid #E2E8F0" }}>
+                        <td style={{ padding: "14px 20px", color: cfg.color, fontWeight: 700, background: "#F8FAFC" }}>
+                          {cfg.icon} {cfg.label}
+                        </td>
+                        <td style={{ padding: "14px 20px", fontSize: 13, lineHeight: 1.8 }}>
+                          {labels.length === 0
+                            ? <span style={{ color: C.muted }}>不參加</span>
+                            : labels.map((l, i) => <div key={i}>{l}</div>)
+                          }
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {/* 按鈕 */}
+            <div style={{ padding: "0 20px 20px" }}>
+              <div style={{ textAlign: "center", fontSize: 12, color: C.muted, marginBottom: 10 }}>
+                📸 請自行截圖畫面留存
+              </div>
+              <button onClick={() => setSuccessData(null)} style={{
+                width: "100%", background: `linear-gradient(135deg, ${C.primary}, #1E40AF)`,
+                color: "#fff", border: "none", borderRadius: 10, padding: "13px",
+                fontSize: 15, fontWeight: 700, cursor: "pointer",
+              }}>確認</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div style={{ background: `linear-gradient(135deg, ${C.primary} 0%, #1E40AF 100%)`, color: "#fff", padding: "18px 14px 0" }}>
+        <div style={{ maxWidth: 700, margin: "0 auto" }}>
+          <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: 0.5 }}>員工運動報名系統</div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2, marginBottom: 16 }}>🧘 瑜伽 &nbsp;🏸 羽球 &nbsp;🎾 網球</div>
+          <div style={{ display: "flex", gap: 2 }}>
+            {[["register","📝 報名"], ["query","🔍 查詢修改"], ["stats","⚙️ 管理"]].map(([key, label]) => (
+              <button key={key} onClick={() => setTab(key)} style={{
+                background: tab === key ? "#fff" : "transparent",
+                color: tab === key ? C.primary : "rgba(255,255,255,0.8)",
+                border: "none", borderRadius: "8px 8px 0 0",
+                padding: "9px 18px", fontWeight: tab === key ? 700 : 500,
+                fontSize: 13, cursor: "pointer",
+              }}>{label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 700, margin: "0 auto", padding: "20px 14px 48px" }}>
+
+        {/* ── 報名 ── */}
+        {tab === "register" && (
+          <div>
+            {openMonths.length === 0 && !editId ? (
+              <Card>
+                <div style={{ textAlign: "center", padding: "32px 0" }}>
+                  <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
+                  <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 8 }}>目前尚無開放報名月份</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 16 }}>報名窗口：每月20號12:00 開放，25號23:59 截止</div>
+                  <div style={{ fontSize: 13,
+                    color: countdown.type === "open" ? C.success : C.primary,
+                    background: countdown.type === "open" ? "#F0FDF4" : C.primaryLight,
+                    borderRadius: 8, padding: "10px 16px", display: "inline-block" }}>
+                    {countdown.type === "open" ? "🟢" : "⏰"} {countdown.text}
+                  </div>
+                </div>
+              </Card>
+            ) : (
+              <>
+                {/* 倒數提示（編輯模式下不顯示，避免與正在編輯的月份訊息矛盾） */}
+                {!editId && (
+                  <div style={{ background: "#F0FDF4", border: "1px solid #BBF7D0", borderRadius: 10, padding: "10px 16px", marginBottom: 14, fontSize: 13, color: C.success }}>
+                    🟢 {countdown.text}
+                  </div>
+                )}
+
+                {openMonths.map(m => {
+                  const key = `${m.year}-${m.month}`;
+                  const active = selectedKey === key;
+                  return (
+                    <button key={key} onClick={() => { setSelectedKey(key); setForm(emptyForm()); setErrors({}); }}
+                      style={{ display: "none" }}>{m.year}年{m.month}月</button>
+                  );
+                })}
+
+                {selectedKey && (
+                  <>
+                    {editId && (
+                      <div style={{ background: "#FFFBEB", border: `1px solid ${C.warning}`, borderRadius: 8, padding: "10px 14px", marginBottom: 12, fontSize: 13, color: C.warning, fontWeight: 600 }}>
+                        ✏️ 編輯模式：{activeYear}年{activeMonth}月
+                      </div>
+                    )}
+
+                    {/* 報名月份標題 */}
+                    <div style={{ background: C.primary, color: "#fff", borderRadius: 10, padding: "12px 18px", marginBottom: 14, fontWeight: 700, fontSize: 16 }}>
+                      📅 {activeYear}年{activeMonth}月 運動報名
+                    </div>
+
+                    <Card title="基本資料">
+                      <FieldRow label="姓名 *" error={errors.name}>
+                        <input value={form.name} onChange={e => setForm(p => ({...p, name: e.target.value}))}
+                          placeholder="請輸入姓名" style={inputSt(errors.name)} />
+                      </FieldRow>
+                      <FieldRow label="手機 *" error={errors.phone}>
+                        <input value={form.phone} onChange={e => setForm(p => ({...p, phone: e.target.value}))}
+                          placeholder="09xxxxxxxx" style={inputSt(errors.phone)} />
+                      </FieldRow>
+                      <FieldRow label="部門 *" error={errors.department}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                          {DEPARTMENTS.map(d => (
+                            <PillBtn key={d} active={form.department === d} color={C.primary}
+                              onClick={() => setForm(p => ({...p, department: d}))}>{d}</PillBtn>
+                          ))}
+                        </div>
+                      </FieldRow>
+                    </Card>
+
+                    {errors.general && (
+                      <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "10px 14px", marginBottom: 14, color: C.danger, fontSize: 13, fontWeight: 600 }}>
+                        ⚠️ {errors.general}
+                      </div>
+                    )}
+
+                    {SPORTS.map(sport => {
+                      const cfg = SPORT_CONFIG[sport];
+                      const sessions = getSessions(sport);
+                      const selected = form[sport] || [];
+                      return (
+                        <Card key={sport} style={{ borderTop: `3px solid ${cfg.color}` }}>
+                          <div style={{ marginBottom: 10 }}>
+                            <span style={{ fontWeight: 700, fontSize: 15, color: cfg.color }}>{cfg.icon} {cfg.label}</span>
+                            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>📍 {cfg.venue}</div>
+                          </div>
+                      {errors[sport] && <div style={{ color: C.danger, fontSize: 12, marginBottom: 8 }}>{errors[sport]}</div>}
+                          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                            {sessions.map(s => {
+                              const cnt = getCount(s.id);
+                              const full = cnt >= s.capacity;
+                              const on = selected.includes(s.id);
+                              return (
+                                <button key={s.id} onClick={() => (!full || on) && toggleSession(sport, s.id)}
+                                  disabled={full && !on}
+                                  style={{
+                                    display: "flex", alignItems: "center", width: "100%", textAlign: "left",
+                                    background: on ? cfg.light : "#F8FAFC",
+                                    border: `1.5px solid ${on ? cfg.color : C.border}`,
+                                    borderRadius: 8, padding: "8px 12px",
+                                    cursor: full && !on ? "not-allowed" : "pointer",
+                                    opacity: full && !on ? 0.45 : 1, gap: 8,
+                                  }}>
+                                  <span style={{ flex: 1, fontSize: 13 }}>{s.label}</span>
+                                  <span style={{ fontSize: 11, color: full ? C.danger : C.muted }}>
+                                    {cnt}/{s.capacity}{full ? " 額滿" : ""}
+                                  </span>
+                                  {on && <span style={{ color: cfg.color, fontWeight: 700, fontSize: 12 }}>✓</span>}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </Card>
+                      );
+                    })}
+
+                    <button onClick={submitForm} disabled={loading} style={{
+                      width: "100%", background: loading ? C.muted : `linear-gradient(135deg, ${C.primary}, #1E40AF)`,
+                      color: "#fff", border: "none", borderRadius: 10, padding: "14px",
+                      fontSize: 16, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer",
+                      boxShadow: "0 3px 10px rgba(29,78,216,0.35)", marginTop: 4,
+                    }}>
+                      {loading ? "⏳ 送出中..." : (editId ? "✓ 確認更新" : "✓ 送出報名")}
+                    </button>
+                    {editId && (
+                      <button onClick={() => { setEditId(null); setForm(emptyForm()); setErrors({}); }}
+                        style={{ width: "100%", background: "#fff", color: C.muted, border: `1.5px solid ${C.border}`,
+                          borderRadius: 10, padding: "12px", fontSize: 14, cursor: "pointer", marginTop: 8 }}>
+                        取消編輯
+                      </button>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+
+
+        {/* ── 查詢修改 ── */}
+        {tab === "query" && (
+          <div>
+            <Card>
+              <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>🔍 查詢我的報名</div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>輸入姓名及部門查詢本月報名紀錄</div>
+              <FieldRow label="姓名" error={queryError}>
+                <input value={queryName} onChange={e => { setQueryName(e.target.value); setQueryError(""); }}
+                  onKeyDown={e => e.key === "Enter" && handleQuery()}
+                  placeholder="請輸入報名時的姓名" style={inputSt(queryError)} />
+              </FieldRow>
+              <FieldRow label="部門">
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                  {DEPARTMENTS.map(d => (
+                    <PillBtn key={d} active={queryDept === d} color={C.primary}
+                      onClick={() => setQueryDept(d)}>{d}</PillBtn>
+                  ))}
+                </div>
+              </FieldRow>
+              <button onClick={handleQuery} disabled={queryLoading} style={{
+                width: "100%", background: C.primary, color: "#fff", border: "none",
+                borderRadius: 8, padding: "11px", fontWeight: 700, fontSize: 14,
+                cursor: queryLoading ? "not-allowed" : "pointer", marginTop: 4
+              }}>{queryLoading ? "查詢中..." : "🔍 查詢"}</button>
+            </Card>
+
+            {queryResult && (
+              <Card>
+                <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12, color: C.primary }}>
+                  📋 {queryResult.year}年{queryResult.month}月 報名紀錄
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                  <tbody>
+                    {[["匿稱", queryResult.name], ["手機", queryResult.phone], ["部門", queryResult.department]].map(([label, value]) => (
+                      <tr key={label} style={{ borderBottom: "1px solid #E2E8F0" }}>
+                        <td style={{ padding: "12px 16px", color: C.muted, fontWeight: 600, width: "35%", background: "#F8FAFC" }}>{label}</td>
+                        <td style={{ padding: "12px 16px" }}>{value}</td>
+                      </tr>
+                    ))}
+                    {SPORTS.map(sport => {
+                      const cfg = SPORT_CONFIG[sport];
+                      const sel = queryResult[sport] || [];
+                      const sessions = SPORT_CONFIG[sport].sessions(queryResult.year, queryResult.month);
+                      const labels = sel.map(id => { const s = sessions.find(x => x.id === id); return s ? s.label : id; });
+                      return (
+                        <tr key={sport} style={{ borderBottom: "1px solid #E2E8F0" }}>
+                          <td style={{ padding: "12px 16px", color: cfg.color, fontWeight: 700, background: "#F8FAFC" }}>{cfg.icon} {cfg.label}</td>
+                          <td style={{ padding: "12px 16px", fontSize: 13, lineHeight: 1.8 }}>
+                            {labels.length === 0
+                              ? <span style={{ color: C.muted }}>不參加</span>
+                              : labels.map((l, i) => <div key={i}>{l}</div>)
+                            }
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+                  <button onClick={() => startEdit(queryResult)} style={{
+                    flex: 1, background: C.primary, color: "#fff", border: "none",
+                    borderRadius: 8, padding: "12px", fontWeight: 700, fontSize: 14, cursor: "pointer"
+                  }}>✏️ 修改報名</button>
+                  <button onClick={() => setConfirmDelete(queryResult.id)} style={{
+                    flex: 1, background: "#FEF2F2", color: C.danger, border: `1.5px solid #FECACA`,
+                    borderRadius: 8, padding: "12px", fontWeight: 700, fontSize: 14, cursor: "pointer"
+                  }}>🗑️ 取消報名</button>
+                </div>
+              </Card>
+            )}
+
+            {confirmDelete && (
+              <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex",
+                alignItems: "center", justifyContent: "center", zIndex: 999 }}>
+                <div style={{ background: "#fff", borderRadius: 14, padding: 28, width: 280, boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>確認取消報名？</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 20 }}>此操作無法復原</div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => setConfirmDelete(null)} style={{ flex: 1, background: C.bg, border: "none", borderRadius: 8, padding: 10, cursor: "pointer" }}>返回</button>
+                    <button onClick={async () => {
+                      await deleteReg(confirmDelete);
+                      setQueryResult(null);
+                      setQueryName("");
+                      setTab("query");
+                    }} style={{ flex: 1, background: C.danger, color: "#fff", border: "none", borderRadius: 8, padding: 10, fontWeight: 700, cursor: "pointer" }}>確認取消</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── 管理 ── */}
+        {tab === "stats" && (
+          <div>
+            {!adminUnlocked ? (
+              <div style={{ display: "flex", justifyContent: "center", alignItems: "center", minHeight: 300 }}>
+                <Card style={{ width: "100%", maxWidth: 340, textAlign: "center" }}>
+                  <div style={{ fontSize: 40, marginBottom: 8 }}>🔐</div>
+                  <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 4 }}>管理者專區</div>
+                  <div style={{ fontSize: 13, color: C.muted, marginBottom: 20 }}>請輸入管理者密碼</div>
+                  <input type="password" value={pwInput}
+                    onChange={e => { setPwInput(e.target.value); setPwError(""); }}
+                    onKeyDown={e => e.key === "Enter" && handleUnlock()}
+                    placeholder="輸入密碼" autoFocus
+                    style={{ ...inputSt(pwError), marginBottom: 8, textAlign: "center", letterSpacing: 4 }} />
+                  {pwError && <div style={{ color: C.danger, fontSize: 12, marginBottom: 8 }}>{pwError}</div>}
+                  <button onClick={handleUnlock} style={{
+                    width: "100%", background: `linear-gradient(135deg, ${C.primary}, #1E40AF)`,
+                    color: "#fff", border: "none", borderRadius: 8, padding: "11px",
+                    fontSize: 15, fontWeight: 700, cursor: "pointer",
+                  }}>進入管理後台</button>
+                </Card>
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <span style={{ fontSize: 13, color: C.success, fontWeight: 600 }}>✅ 管理者已登入</span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => setShowChangePw(true)} style={{
+                      background: "#fff", color: C.primary, border: `1.5px solid ${C.border}`,
+                      borderRadius: 7, padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    }}>🔑 修改密碼</button>
+                    <button onClick={() => setAdminUnlocked(false)} style={{
+                      background: "#fff", color: C.muted, border: `1.5px solid ${C.border}`,
+                      borderRadius: 7, padding: "5px 12px", fontSize: 12, cursor: "pointer",
+                    }}>登出</button>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+                  {[["status","📅 月份狀態"], ["records","📋 報名紀錄"], ["stats","📊 統計報表"], ["simulate","🧪 模擬時間"]].map(([key, label]) => (
+                    <button key={key} onClick={() => setAdminTab(key)} style={{
+                      background: adminTab === key ? C.primary : "#fff",
+                      color: adminTab === key ? "#fff" : C.muted,
+                      border: `1.5px solid ${adminTab === key ? C.primary : C.border}`,
+                      borderRadius: 8, padding: "8px 14px", fontWeight: 600, fontSize: 12, cursor: "pointer",
+                    }}>{label}</button>
+                  ))}
+                </div>
+
+                {/* 月份狀態 */}
+                {adminTab === "status" && (
+                  <div>
+                    <Card style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+                      <div style={{ fontWeight: 700, fontSize: 14, color: C.success, marginBottom: 8 }}>📋 自動開放規則</div>
+                      <div style={{ fontSize: 13, color: C.text, lineHeight: 1.9 }}>
+                        • <b>當月20號 12:00</b>：自動開放下個月報名<br/>
+                        • <b>當月25號 23:59</b>：報名截止，表單自動關閉<br/>
+                        • 管理員可手動<b>關閉</b>已自動開放的月份
+                      </div>
+                      <div style={{ marginTop: 10, fontSize: 13,
+                        color: countdown.type === "open" ? C.success : countdown.type === "closed" ? C.danger : C.primary,
+                        background: countdown.type === "open" ? "#dcfce7" : countdown.type === "closed" ? "#FEF2F2" : C.primaryLight,
+                        borderRadius: 6, padding: "8px 12px" }}>
+                        {countdown.type === "open" ? "🟢" : countdown.type === "closed" ? "🔴" : "⏰"} {countdown.text}
+                      </div>
+                    </Card>
+
+                    <Card title="目前月份開放狀態">
+                      <div style={{ fontSize: 12, color: C.muted, marginBottom: 14 }}>
+                        目前時間：{effectiveDate.getFullYear()}年{effectiveDate.getMonth()+1}月{effectiveDate.getDate()}號 {String(effectiveDate.getHours()).padStart(2,"0")}:{String(effectiveDate.getMinutes()).padStart(2,"0")}
+                        {adminUnlocked && " （模擬中）"}
+                      </div>
+                      {[effectiveDate.getFullYear(), effectiveDate.getFullYear() + 1].map(yr => (
+                        <div key={yr} style={{ marginBottom: 20 }}>
+                          <div style={{ fontWeight: 700, fontSize: 14, color: C.primary, marginBottom: 10 }}>{yr}年</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                            {MONTHS.map(m => {
+                              const isAuto = autoOpenMonths.find(am => am.year === yr && am.month === m.value);
+                              const key = `${yr}-${m.value}`;
+                              const isClosed = manualClosed.includes(key);
+                              const isOpen = isAuto && !isClosed;
+                              const isPast = new Date(yr, m.value - 1, 1) < new Date(effectiveDate.getFullYear(), effectiveDate.getMonth(), 1);
+
+                              if (!isAuto) {
+                                return (
+                                  <div key={m.value} style={{
+                                    background: "#F8FAFC", color: "#CBD5E1", border: "2px solid #E2E8F0",
+                                    borderRadius: 8, padding: "10px 0", fontWeight: 700, fontSize: 14,
+                                    textAlign: "center",
+                                  }}>
+                                    {m.label}
+                                    <div style={{ fontSize: 9, color: "#CBD5E1", marginTop: 2 }}>{isPast ? "已結束" : "未開放"}</div>
+                                  </div>
+                                );
+                              }
+                              return (
+                                <button key={m.value} onClick={() => toggleManualClose(yr, m.value)}
+                                  style={{
+                                    background: isOpen ? C.primary : "#FEF2F2",
+                                    color: isOpen ? "#fff" : C.danger,
+                                    border: `2px solid ${isOpen ? C.primary : C.danger}`,
+                                    borderRadius: 8, padding: "10px 0",
+                                    fontWeight: 700, fontSize: 14, cursor: "pointer", textAlign: "center",
+                                  }}>
+                                  {m.label}
+                                  <div style={{ fontSize: 9, marginTop: 2 }}>{isOpen ? "✅ 開放中" : "🚫 已關閉"}</div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ fontSize: 12, color: C.muted }}>💡 點擊開放中的月份可手動關閉；已關閉的可重新開放</div>
+                    </Card>
+
+                    <Card style={{ background: openMonths.length > 0 ? "#F0FDF4" : "#FEF2F2", border: `1px solid ${openMonths.length > 0 ? "#BBF7D0" : "#FECACA"}` }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: openMonths.length > 0 ? C.success : C.danger, marginBottom: 8 }}>
+                        目前員工可報名的月份
+                      </div>
+                      {openMonths.length === 0
+                        ? <div style={{ fontSize: 13, color: C.muted }}>目前無任何開放月份</div>
+                        : <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                          {openMonths.map(m => (
+                            <span key={`${m.year}-${m.month}`} style={{ background: C.success, color: "#fff", borderRadius: 6, padding: "4px 12px", fontSize: 13, fontWeight: 700 }}>
+                              {m.year}年{m.month}月
+                            </span>
+                          ))}
+                        </div>
+                      }
+                    </Card>
+                  </div>
+                )}
+
+                {/* 報名紀錄 */}
+                {adminTab === "records" && (
+                  <div>
+                    <Card style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 600, fontSize: 14 }}>篩選月份</span>
+                      <YearMonthPicker year={filterYear} month={filterMonth} onYear={setFilterYear} onMonth={setFilterMonth} />
+                      <span style={{ marginLeft: "auto", fontSize: 13, color: C.muted }}>{filteredRegs.length} 筆</span>
+                    </Card>
+                    {filteredRegs.length === 0 ? (
+                      <Card><div style={{ textAlign: "center", color: C.muted, padding: "24px 0" }}>本月尚無報名紀錄</div></Card>
+                    ) : filteredRegs.map(r => (
+                      <Card key={r.id}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <div>
+                            <span style={{ fontWeight: 700, fontSize: 15 }}>{r.name}</span>
+                            <span style={{ marginLeft: 8, background: C.primaryLight, color: C.primary,
+                              borderRadius: 5, padding: "2px 8px", fontSize: 11, fontWeight: 600 }}>{r.department}</span>
+                          </div>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <SmallBtn color={C.primary} bg={C.primaryLight} onClick={() => startEdit(r)}>編輯</SmallBtn>
+                            <SmallBtn color={C.danger} bg="#FEF2F2" onClick={() => setConfirmDelete(r.id)}>刪除</SmallBtn>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{r.phone} · {r.createdAt}</div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 8 }}>
+                          {SPORTS.map(sport => {
+                            const cfg = SPORT_CONFIG[sport];
+                            const sel = r[sport] || [];
+                            if (sel.includes(`${sport}-none`)) return (
+                              <span key={sport} style={{ background: "#F1F5F9", color: C.muted, borderRadius: 5, padding: "2px 8px", fontSize: 11 }}>
+                                {cfg.icon} 不參加{cfg.label}
+                              </span>
+                            );
+                            return sel.map(sid => (
+                              <span key={sid} style={{ background: cfg.light, color: cfg.color, borderRadius: 5, padding: "2px 8px", fontSize: 11 }}>
+                                {cfg.icon} {sid.split("-").slice(1, 3).join("/")}
+                              </span>
+                            ));
+                          })}
+                        </div>
+                      </Card>
+                    ))}
+                    {confirmDelete && (
+                      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex",
+                        alignItems: "center", justifyContent: "center", zIndex: 999 }}>
+                        <div style={{ background: "#fff", borderRadius: 14, padding: 28, width: 280, boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+                          <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>確認刪除？</div>
+                          <div style={{ fontSize: 13, color: C.muted, marginBottom: 20 }}>此操作無法復原</div>
+                          <div style={{ display: "flex", gap: 10 }}>
+                            <button onClick={() => setConfirmDelete(null)} style={{ flex: 1, background: C.bg, border: "none", borderRadius: 8, padding: 10, cursor: "pointer" }}>取消</button>
+                            <button onClick={() => deleteReg(confirmDelete)} style={{ flex: 1, background: C.danger, color: "#fff", border: "none", borderRadius: 8, padding: 10, fontWeight: 700, cursor: "pointer" }}>確認刪除</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 統計報表 */}
+                {adminTab === "stats" && (
+                  <StatsView regs={regs} filterYear={statsFilterYear} filterMonth={statsFilterMonth}
+                    setFilterYear={setStatsFilterYear} setFilterMonth={setStatsFilterMonth} />
+                )}
+
+                {/* 模擬時間 */}
+                {adminTab === "simulate" && (
+                  <Card>
+                    <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>🧪 模擬日期時間</div>
+                    <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>調整時間測試開放邏輯（管理員登入期間有效）</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                      <select value={simYear} onChange={e => setSimYear(+e.target.value)} style={{ ...inputSt(false), width: "auto" }}>
+                        {[2025, 2026, 2027].map(y => <option key={y}>{y}</option>)}
+                      </select>
+                      <select value={simMonth} onChange={e => setSimMonth(+e.target.value)} style={{ ...inputSt(false), width: "auto" }}>
+                        {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                      </select>
+                      <select value={simDay} onChange={e => setSimDay(+e.target.value)} style={{ ...inputSt(false), width: "auto" }}>
+                        {Array.from({ length: 31 }, (_, i) => i + 1).map(d => <option key={d} value={d}>{d}號</option>)}
+                      </select>
+                      <select value={simHour} onChange={e => setSimHour(+e.target.value)} style={{ ...inputSt(false), width: "auto" }}>
+                        {Array.from({ length: 24 }, (_, i) => i).map(h => <option key={h} value={h}>{String(h).padStart(2,"0")}時</option>)}
+                      </select>
+                      <select value={simMin} onChange={e => setSimMin(+e.target.value)} style={{ ...inputSt(false), width: "auto" }}>
+                        {[0,15,30,45,59].map(min => <option key={min} value={min}>{String(min).padStart(2,"0")}分</option>)}
+                      </select>
+                    </div>
+                    <div style={{ padding: "12px 14px", background: countdown.type === "open" ? "#F0FDF4" : countdown.type === "closed" ? "#FEF2F2" : C.primaryLight,
+                      borderRadius: 8, fontSize: 13, lineHeight: 1.8,
+                      border: `1px solid ${countdown.type === "open" ? "#BBF7D0" : countdown.type === "closed" ? "#FECACA" : "#BFDBFE"}` }}>
+                      <b>模擬時間：</b>{simYear}年{simMonth}月{simDay}號 {String(simHour).padStart(2,"0")}:{String(simMin).padStart(2,"0")}<br/>
+                      <b>開放窗口：</b>{simYear}年{simMonth}月20日 12:00 ～ 25日 23:59<br/>
+                      <b>狀態：</b>
+                      {countdown.type === "open" && <span style={{ color: C.success, fontWeight: 700 }}>🟢 報名開放中</span>}
+                      {countdown.type === "pending" && <span style={{ color: C.primary, fontWeight: 700 }}>⏳ 尚未開放</span>}
+                      {countdown.type === "closed" && <span style={{ color: C.danger, fontWeight: 700 }}>🔴 已截止</span>}
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                      <button onClick={() => { setSimDay(today.getDate()); setSimMonth(today.getMonth()+1); setSimYear(today.getFullYear()); setSimHour(today.getHours()); setSimMin(today.getMinutes()); }}
+                        style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12 }}>重置為現在</button>
+                      <button onClick={() => { setSimDay(20); setSimHour(11); setSimMin(59); }}
+                        style={{ background: C.bg, border: `1.5px solid ${C.border}`, borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12 }}>20號 11:59（開放前）</button>
+                      <button onClick={() => { setSimDay(20); setSimHour(12); setSimMin(0); }}
+                        style={{ background: "#F0FDF4", border: "1.5px solid #BBF7D0", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12 }}>20號 12:00（剛開放）</button>
+                      <button onClick={() => { setSimDay(25); setSimHour(23); setSimMin(59); }}
+                        style={{ background: "#FFFBEB", border: "1.5px solid #FDE68A", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12 }}>25號 23:59（截止前）</button>
+                      <button onClick={() => { setSimDay(26); setSimHour(0); setSimMin(0); }}
+                        style={{ background: "#FEF2F2", border: "1.5px solid #FECACA", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12 }}>26號 00:00（截止後）</button>
+                    </div>
+                  </Card>
+                )}
+
+                {showChangePw && (
+                  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex",
+                    alignItems: "center", justifyContent: "center", zIndex: 999 }}>
+                    <div style={{ background: "#fff", borderRadius: 14, padding: 28, width: 320, boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+                      <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 16 }}>🔑 修改密碼</div>
+                      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>新密碼（至少4個字元）</div>
+                      <input type="password" value={newPw} onChange={e => { setNewPw(e.target.value); setChangePwError(""); }}
+                        placeholder="輸入新密碼" style={{ ...inputSt(false), marginBottom: 10 }} />
+                      <div style={{ fontSize: 12, color: C.muted, marginBottom: 6 }}>確認新密碼</div>
+                      <input type="password" value={confirmPw} onChange={e => { setConfirmPw(e.target.value); setChangePwError(""); }}
+                        placeholder="再次輸入新密碼" style={{ ...inputSt(!!changePwError), marginBottom: 10 }} />
+                      {changePwError && <div style={{ color: C.danger, fontSize: 12, marginBottom: 8 }}>{changePwError}</div>}
+                      <div style={{ display: "flex", gap: 10 }}>
+                        <button onClick={() => { setShowChangePw(false); setNewPw(""); setConfirmPw(""); setChangePwError(""); }}
+                          style={{ flex: 1, background: C.bg, border: "none", borderRadius: 8, padding: 10, cursor: "pointer" }}>取消</button>
+                        <button onClick={handleChangePw}
+                          style={{ flex: 1, background: C.primary, color: "#fff", border: "none", borderRadius: 8, padding: 10, fontWeight: 700, cursor: "pointer" }}>確認修改</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function StatsView({ regs, filterYear, filterMonth, setFilterYear, setFilterMonth }) {
+  const statRegs = regs.filter(r => r.month === filterMonth && r.year === filterYear);
+  const statSessions = {};
+  SPORTS.forEach(s => { statSessions[s] = SPORT_CONFIG[s].sessions(filterYear, filterMonth); });
+  const deptStats = DEPARTMENTS.map(dept => {
+    const dRegs = statRegs.filter(r => r.department === dept);
+    const row = { dept, total: dRegs.length };
+    SPORTS.forEach(s => { row[s] = dRegs.filter(r => !(r[s] || []).includes(`${s}-none`)).length; });
+    return row;
+  }).filter(d => d.total > 0);
+
+  return (
+    <div>
+      <Card style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 600, fontSize: 14 }}>統計月份</span>
+        <YearMonthPicker year={filterYear} month={filterMonth} onYear={setFilterYear} onMonth={setFilterMonth} />
+      </Card>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+        <StatCard icon="👥" value={statRegs.length} label="總報名人數" color={C.primary} />
+        {SPORTS.map(s => {
+          const cfg = SPORT_CONFIG[s];
+          const cnt = statRegs.filter(r => !(r[s] || []).includes(`${s}-none`)).length;
+          return <StatCard key={s} icon={cfg.icon} value={cnt} label={`${cfg.label}人數`} color={cfg.color} />;
+        })}
+      </div>
+      <Card title="各部門出席">
+        {deptStats.length === 0
+          ? <div style={{ color: C.muted, fontSize: 14 }}>本月尚無資料</div>
+          : deptStats.map(d => (
+            <div key={d.dept} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                <span style={{ fontWeight: 600 }}>{d.dept}</span>
+                <span style={{ color: C.muted }}>{SPORTS.map(s => `${SPORT_CONFIG[s].icon}${d[s]}`).join(" ")}</span>
+              </div>
+              <div style={{ display: "flex", gap: 3, height: 8 }}>
+                {SPORTS.map(s => {
+                  const cfg = SPORT_CONFIG[s];
+                  return <div key={s} style={{ height: 8, borderRadius: 4, background: cfg.color, width: `${d[s] * 20}px`, minWidth: d[s] > 0 ? 8 : 0 }} />;
+                })}
+              </div>
+            </div>
+          ))}
+      </Card>
+      {SPORTS.map(sport => {
+        const cfg = SPORT_CONFIG[sport];
+        const sessions = statSessions[sport];
+        return (
+          <Card key={sport} style={{ borderTop: `3px solid ${cfg.color}` }}>
+            <div style={{ fontWeight: 700, fontSize: 14, color: cfg.color, marginBottom: 12 }}>{cfg.icon} {cfg.label} 場次統計</div>
+            {sessions.map(s => {
+              const cnt = statRegs.filter(r => (r[sport] || []).includes(s.id)).length;
+              const pct = Math.min(cnt / s.capacity * 100, 100);
+              const full = cnt >= s.capacity;
+              return (
+                <div key={s.id} style={{ marginBottom: 9 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                    <span>{s.label}</span>
+                    <span style={{ fontWeight: 600, color: full ? C.danger : C.success }}>{cnt}/{s.capacity}</span>
+                  </div>
+                  <div style={{ background: C.border, borderRadius: 4, height: 6 }}>
+                    <div style={{ height: 6, borderRadius: 4, background: full ? C.danger : cfg.color, width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function Card({ children, title, style = {} }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, padding: "16px 18px", marginBottom: 14, boxShadow: "0 1px 4px rgba(0,0,0,0.06)", ...style }}>
+      {title && <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>{title}</div>}
+      {children}
+    </div>
+  );
+}
+function FieldRow({ label, error, children }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 12, color: "#64748B", marginBottom: 5 }}>{label}</div>
+      {children}
+      {error && <div style={{ color: "#DC2626", fontSize: 12, marginTop: 3 }}>{error}</div>}
+    </div>
+  );
+}
+function PillBtn({ active, color, onClick, children }) {
+  return (
+    <button onClick={onClick} style={{
+      background: active ? color : "#F1F5F9", color: active ? "#fff" : "#64748B",
+      border: "none", borderRadius: 7, padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+    }}>{children}</button>
+  );
+}
+function SmallBtn({ color, bg, onClick, children }) {
+  return (
+    <button onClick={onClick} style={{ background: bg, color, border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+      {children}
+    </button>
+  );
+}
+function StatCard({ icon, value, label, color }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 12, padding: "14px 16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
+      <div style={{ fontSize: 20 }}>{icon}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color, lineHeight: 1.2 }}>{value}</div>
+      <div style={{ fontSize: 12, color: "#64748B", marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+function YearMonthPicker({ year, month, onYear, onMonth }) {
+  const sel = { border: "1.5px solid #E2E8F0", borderRadius: 7, padding: "6px 9px", fontSize: 13, background: "#fff", cursor: "pointer" };
+  return (
+    <>
+      <select value={year} onChange={e => onYear(+e.target.value)} style={sel}>
+        {[2024,2025,2026,2027].map(y => <option key={y}>{y}</option>)}
+      </select>
+      <select value={month} onChange={e => onMonth(+e.target.value)} style={sel}>
+        {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+      </select>
+    </>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
