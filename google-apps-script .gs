@@ -5,6 +5,16 @@
 
 const SHEET_ID = "1VqSECXOB15jpura28xAmtBSQefQO5OX60pVJSrsIIaU";
 
+// 個別月份名額調整（覆蓋預設名額）：{ 運動: { "年-月": 名額 } }
+const CAPACITY_OVERRIDES = {
+  tennis: { "2026-10": 8 },
+};
+function getCapacity(sport, year, month, defaultCap) {
+  const o = CAPACITY_OVERRIDES[sport];
+  const v = o && o[`${year}-${month}`];
+  return v != null ? v : defaultCap;
+}
+
 const SPORT_CONFIG = {
   yoga: {
     label: "瑜伽", sheetName: "瑜伽",
@@ -44,7 +54,7 @@ const SPORT_CONFIG = {
       for (let d = 1; d <= dim; d++) {
         const day = new Date(year, month - 1, d).getDay();
         const dd = `${month}/${String(d).padStart(2,"0")}`;
-        if (day === 3) days.push({ id: `tennis-${d}-1900`, label: `${dd}（${names[day]}）19:00～21:00`, capacity: 10 });
+        if (day === 3) days.push({ id: `tennis-${d}-1900`, label: `${dd}（${names[day]}）19:00～21:00`, capacity: getCapacity("tennis", year, month, 10) });
       }
       return days;
     }
