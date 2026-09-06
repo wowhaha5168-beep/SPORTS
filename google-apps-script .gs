@@ -14,8 +14,8 @@ const SPORT_CONFIG = {
       for (let d = 1; d <= dim; d++) {
         const day = new Date(year, month - 1, d).getDay();
         const dd = `${month}/${String(d).padStart(2,"0")}`;
-        if (day === 3) days.push({ id: `yoga-${d}-1730`, label: `${dd}（${names[day]}）17:30～18:30` });
-        if (day === 5) days.push({ id: `yoga-${d}-1030`, label: `${dd}（${names[day]}）10:30～11:30` });
+        if (day === 3) days.push({ id: `yoga-${d}-1730`, label: `${dd}（${names[day]}）17:30～18:30`, capacity: 20 });
+        if (day === 5) days.push({ id: `yoga-${d}-1030`, label: `${dd}（${names[day]}）10:30～11:30`, capacity: 15 });
       }
       return days;
     }
@@ -29,8 +29,8 @@ const SPORT_CONFIG = {
         const day = new Date(year, month - 1, d).getDay();
         const dd = `${month}/${String(d).padStart(2,"0")}`;
         if (day === 2) {
-          days.push({ id: `badminton-${d}-0900`, label: `${dd}（${names[day]}）09:00～11:00` });
-          days.push({ id: `badminton-${d}-1700`, label: `${dd}（${names[day]}）17:00～19:00` });
+          days.push({ id: `badminton-${d}-0900`, label: `${dd}（${names[day]}）09:00～11:00`, capacity: 8 });
+          days.push({ id: `badminton-${d}-1700`, label: `${dd}（${names[day]}）17:00～19:00`, capacity: 20 });
         }
       }
       return days;
@@ -44,7 +44,7 @@ const SPORT_CONFIG = {
       for (let d = 1; d <= dim; d++) {
         const day = new Date(year, month - 1, d).getDay();
         const dd = `${month}/${String(d).padStart(2,"0")}`;
-        if (day === 3) days.push({ id: `tennis-${d}-1900`, label: `${dd}（${names[day]}）19:00～21:00` });
+        if (day === 3) days.push({ id: `tennis-${d}-1900`, label: `${dd}（${names[day]}）19:00～21:00`, capacity: 10 });
       }
       return days;
     }
@@ -52,7 +52,9 @@ const SPORT_CONFIG = {
 };
 
 const SPORTS = ["yoga", "badminton", "tennis"];
-const CAPACITIES = { yoga_wed: 20, yoga_fri: 15, badminton: 16, tennis: 10 };
+// 「剩餘名額」分頁的欄位順序（由左至右）
+const REMAIN_ORDER = ["badminton", "yoga", "tennis"];
+const REMAIN_SHEET_SUFFIX = "剩餘名額";
 
 function doPost(e) {
   try {
@@ -99,7 +101,18 @@ function handleAction(data) {
   if (action === "getRegs")   return getRegs(data);
   if (action === "getPassword")  return getPassword();
   if (action === "savePassword") return savePassword(data.password);
+  if (action === "rebuildRemaining") return rebuildRemaining(data);
   return res({ error: "Unknown action" });
+}
+
+// ── 手動補建/刷新指定月份的「剩餘名額」分頁（用於報名已截止、不會再觸發 addReg 的情況）──
+function rebuildRemaining(data) {
+  const year = parseInt(data.year, 10);
+  const month = parseInt(data.month, 10);
+  if (!year || !month) return res({ error: "缺少 year 或 month" });
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  buildRemainingSheet(ss, year, month);
+  return res({ success: true, year, month });
 }
 
 // ── 取得密碼 ──
@@ -213,6 +226,9 @@ function addReg(data) {
     });
   });
 
+  // 更新「剩餘名額」分頁
+  buildRemainingSheet(ss, year, month);
+
   return res({ success: true, id });
 }
 
@@ -271,6 +287,9 @@ function deleteReg(data) {
     }
   });
 
+  // 更新「剩餘名額」分頁
+  buildRemainingSheet(ss, year, month);
+
   return res({ success: true });
 }
 
@@ -294,6 +313,111 @@ function ensureAllSheets(ss, year, month) {
       buildSportSheet(s, cfg, year, month, sport);
     }
   });
+
+  // 第五個分頁：剩餘名額（尚未有人報名時，先以滿額建立）
+  if (!ss.getSheetByName(`${year}年${month}月${REMAIN_SHEET_SUFFIX}`)) {
+    buildRemainingSheet(ss, year, month);
+  }
+}
+
+// ── 統計各場次目前已報名人數 ──
+function getSessionCounts(ss, year, month) {
+  const counts = {};
+  const summarySheet = ss.getSheetByName(`${year}年${month}月總表`);
+  if (!summarySheet) return counts;
+  const rows = summarySheet.getDataRange().getValues();
+  if (rows.length <= 1) return counts;
+
+  const headers = rows[0];
+  const colIdx = { yoga: headers.indexOf("瑜伽"), badminton: headers.indexOf("羽球"), tennis: headers.indexOf("網球") };
+  rows.slice(1).forEach(row => {
+    SPORTS.forEach(sport => {
+      const idx = colIdx[sport];
+      if (idx === -1) return;
+      const val = row[idx];
+      if (!val) return;
+      String(val).split("、").forEach(id => {
+        id = id.trim();
+        if (!id || id.indexOf("-none") !== -1) return;
+        counts[id] = (counts[id] || 0) + 1;
+      });
+    });
+  });
+  return counts;
+}
+
+// 依日期算出屬於當月第幾個「日～六」週（用來把同一週的場次排在同一列區塊）
+function getWeekIndex(year, month, day) {
+  const firstDow = new Date(year, month - 1, 1).getDay(); // 0=日
+  return Math.floor((day - 1 + firstDow) / 7);
+}
+
+// ── 建立/更新「剩餘名額」分頁 ──
+function buildRemainingSheet(ss, year, month) {
+  const sheetName = `${year}年${month}月${REMAIN_SHEET_SUFFIX}`;
+  let sheet = ss.getSheetByName(sheetName);
+  if (sheet) { sheet.clear(); } else { sheet = ss.insertSheet(sheetName); }
+
+  const counts = getSessionCounts(ss, year, month);
+
+  // 依運動別，將場次依「週」分組
+  const perSportWeeks = {};
+  let maxWeek = 0;
+  REMAIN_ORDER.forEach(sport => {
+    const cfg = SPORT_CONFIG[sport];
+    const sessions = cfg.sessions(year, month);
+    const weeks = {};
+    sessions.forEach(s => {
+      const day = parseInt(s.id.split("-")[1], 10);
+      const wk = getWeekIndex(year, month, day);
+      if (!weeks[wk]) weeks[wk] = [];
+      weeks[wk].push(s);
+      if (wk > maxWeek) maxWeek = wk;
+    });
+    perSportWeeks[sport] = weeks;
+  });
+
+  // 表頭（第1列：項目／第2列：日期＋運動名稱）
+  REMAIN_ORDER.forEach((sport, i) => {
+    const dateCol = i * 2 + 1;   // A, C, E
+    const itemCol = i * 2 + 2;  // B, D, F
+    const cfg = SPORT_CONFIG[sport];
+    sheet.getRange(1, itemCol).setValue("項目")
+      .setBackground("#FFFF00").setFontWeight("bold").setHorizontalAlignment("center");
+    sheet.getRange(2, dateCol).setValue("日期")
+      .setBackground("#00FFFF").setFontWeight("bold").setHorizontalAlignment("center");
+    sheet.getRange(2, itemCol).setValue(cfg.label)
+      .setBackground("#FFF8DC").setFontWeight("bold").setHorizontalAlignment("center");
+  });
+
+  // 資料列：依週分組，每週區塊的列數 = 該週三項運動場次數的最大值
+  let row = 3;
+  for (let wk = 0; wk <= maxWeek; wk++) {
+    let blockRows = 0;
+    REMAIN_ORDER.forEach(sport => {
+      const list = perSportWeeks[sport][wk] || [];
+      if (list.length > blockRows) blockRows = list.length;
+    });
+    if (blockRows === 0) continue;
+
+    REMAIN_ORDER.forEach((sport, i) => {
+      const dateCol = i * 2 + 1;
+      const list = perSportWeeks[sport][wk] || [];
+      list.forEach((s, idx) => {
+        const remain = Math.max(0, s.capacity - (counts[s.id] || 0));
+        sheet.getRange(row + idx, dateCol).setValue(`${s.label} (尚餘: ${remain})`)
+          .setFontColor("#0000FF").setBackground("#FDF6E3");
+      });
+    });
+
+    // 每週區塊下方畫粗紅線分隔
+    sheet.getRange(row + blockRows - 1, 1, 1, 6)
+      .setBorder(false, false, true, false, false, false, "#CC0000", SpreadsheetApp.BorderStyle.SOLID_THICK);
+    row += blockRows;
+  }
+
+  sheet.setColumnWidths(1, 6, 190);
+  sheet.setFrozenRows(2);
 }
 
 function buildSportSheet(sheet, cfg, year, month, sport) {

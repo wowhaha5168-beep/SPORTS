@@ -180,6 +180,23 @@ function getCountdownInfo(now) {
   }
 }
 
+// 查詢用：算出「目前應該查哪個月份」——
+// 每月20~25號報名的是下個月；截止後(26號~次月19號)查的仍是那個「下個月」，
+// 直到再進入下一次開放的月份為止。
+function getQueryTargetMonth(now) {
+  const y = now.getFullYear();
+  const m = now.getMonth() + 1;
+  const day = now.getDate();
+  if (day < 20) {
+    // 上一次開放視窗（上個月20~25號）報的就是本月
+    return { year: y, month: m };
+  }
+  // day >= 20：本月20~25號報名視窗開放中，或已於25號23:59截止 → 查的都是下個月
+  let nm = m + 1, ny = y;
+  if (nm > 12) { nm = 1; ny++; }
+  return { year: ny, month: nm };
+}
+
 function emptyForm() {
   return { name: "", phone: "", department: "", yoga: [], badminton: [], tennis: [] };
 }
@@ -210,6 +227,9 @@ function App() {
 
   const [queryName, setQueryName] = useState("");
   const [queryDept, setQueryDept] = useState("");
+  const defaultQueryTarget = getQueryTargetMonth(today);
+  const [queryYear, setQueryYear] = useState(defaultQueryTarget.year);
+  const [queryMonth, setQueryMonth] = useState(defaultQueryTarget.month);
   const [queryResult, setQueryResult] = useState(null);
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState("");
@@ -379,7 +399,7 @@ function App() {
     if (!queryDept) { setQueryError("請選擇部門"); return; }
     setQueryLoading(true); setQueryResult(null); setQueryError("");
     try {
-      const target = openMonths.length > 0 ? openMonths[0] : { year: effectiveDate.getFullYear(), month: effectiveDate.getMonth() + 1 };
+      const target = { year: queryYear, month: queryMonth };
       const result = await apiCall({ action: "getRegs", year: target.year, month: target.month });
       if (result.regs) {
         const parsed = result.regs.map(r => ({
@@ -657,7 +677,12 @@ function App() {
           <div>
             <Card>
               <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>🔍 查詢我的報名</div>
-              <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>輸入姓名及部門查詢本月報名紀錄</div>
+              <div style={{ fontSize: 12, color: C.muted, marginBottom: 16 }}>選擇報名月份，輸入姓名及部門查詢報名紀錄（報名截止後仍可查詢）</div>
+              <FieldRow label="報名月份">
+                <div style={{ display: "flex", gap: 8 }}>
+                  <YearMonthPicker year={queryYear} month={queryMonth} onYear={setQueryYear} onMonth={setQueryMonth} />
+                </div>
+              </FieldRow>
               <FieldRow label="姓名" error={queryError}>
                 <input value={queryName} onChange={e => { setQueryName(e.target.value); setQueryError(""); }}
                   onKeyDown={e => e.key === "Enter" && handleQuery()}
@@ -710,16 +735,23 @@ function App() {
                     })}
                   </tbody>
                 </table>
-                <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-                  <button onClick={() => startEdit(queryResult)} style={{
-                    flex: 1, background: C.primary, color: "#fff", border: "none",
-                    borderRadius: 8, padding: "12px", fontWeight: 700, fontSize: 14, cursor: "pointer"
-                  }}>✏️ 修改報名</button>
-                  <button onClick={() => setConfirmDelete(queryResult.id)} style={{
-                    flex: 1, background: "#FEF2F2", color: C.danger, border: `1.5px solid #FECACA`,
-                    borderRadius: 8, padding: "12px", fontWeight: 700, fontSize: 14, cursor: "pointer"
-                  }}>🗑️ 取消報名</button>
-                </div>
+                {openMonths.some(m => m.year === queryResult.year && m.month === queryResult.month) ? (
+                  <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+                    <button onClick={() => startEdit(queryResult)} style={{
+                      flex: 1, background: C.primary, color: "#fff", border: "none",
+                      borderRadius: 8, padding: "12px", fontWeight: 700, fontSize: 14, cursor: "pointer"
+                    }}>✏️ 修改報名</button>
+                    <button onClick={() => setConfirmDelete(queryResult.id)} style={{
+                      flex: 1, background: "#FEF2F2", color: C.danger, border: `1.5px solid #FECACA`,
+                      borderRadius: 8, padding: "12px", fontWeight: 700, fontSize: 14, cursor: "pointer"
+                    }}>🗑️ 取消報名</button>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 16, textAlign: "center", fontSize: 12, color: C.muted,
+                    background: "#F8FAFC", border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 12px" }}>
+                    🔒 報名已截止，僅供查詢，無法修改或取消
+                  </div>
+                )}
               </Card>
             )}
 
@@ -732,7 +764,7 @@ function App() {
                   <div style={{ display: "flex", gap: 10 }}>
                     <button onClick={() => setConfirmDelete(null)} style={{ flex: 1, background: C.bg, border: "none", borderRadius: 8, padding: 10, cursor: "pointer" }}>返回</button>
                     <button onClick={async () => {
-                      await deleteReg(confirmDelete);
+                      await deleteReg(confirmDelete, queryResult && queryResult.year, queryResult && queryResult.month);
                       setQueryResult(null);
                       setQueryName("");
                       setTab("query");
