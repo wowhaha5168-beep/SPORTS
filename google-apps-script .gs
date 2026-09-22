@@ -25,7 +25,6 @@ const SPORT_CONFIG = {
         const day = new Date(year, month - 1, d).getDay();
         const dd = `${month}/${String(d).padStart(2,"0")}`;
         if (day === 3) days.push({ id: `yoga-${d}-1730`, label: `${dd}（${names[day]}）17:30～18:30`, capacity: 20 });
-        if (day === 5) days.push({ id: `yoga-${d}-1030`, label: `${dd}（${names[day]}）10:30～11:30`, capacity: 15 });
       }
       return days;
     }
