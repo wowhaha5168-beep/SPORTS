@@ -65,6 +65,46 @@ const SPORTS = ["yoga", "badminton", "tennis"];
 const REMAIN_ORDER = ["badminton", "yoga", "tennis"];
 const REMAIN_SHEET_SUFFIX = "剩餘名額";
 
+// ── 找出指定年月專屬的報名表檔案，不存在則回傳 null（不會新建）──
+function findMonthlySpreadsheet(year, month) {
+  const fileName = `${year}年${month}月運動報名表`;
+  const baseFile = DriveApp.getFileById(SHEET_ID);
+  const parents = baseFile.getParents();
+  const folder = parents.hasNext() ? parents.next() : null;
+
+  const files = folder ? folder.getFilesByName(fileName) : DriveApp.getFilesByName(fileName);
+  return files.hasNext() ? SpreadsheetApp.open(files.next()) : null;
+}
+
+// ── 取得（或新建）指定年月專屬的報名表檔案 ──
+// 例如：2026年10月運動報名表，與「2026年9月運動報名表」放在同一個資料夾
+function getMonthlySpreadsheet(year, month) {
+  const existing = findMonthlySpreadsheet(year, month);
+  if (existing) return existing;
+
+  const fileName = `${year}年${month}月運動報名表`;
+  const baseFile = DriveApp.getFileById(SHEET_ID);
+  const parents = baseFile.getParents();
+  const folder = parents.hasNext() ? parents.next() : null;
+
+  const newSs = SpreadsheetApp.create(fileName);
+  const newFile = DriveApp.getFileById(newSs.getId());
+  if (folder) {
+    folder.addFile(newFile);
+    DriveApp.getRootFolder().removeFile(newFile);
+  }
+  return newSs;
+}
+
+// ── 新建檔案時會多一個預設的空白分頁，等其他分頁建好後清掉 ──
+function removeDefaultSheet(ss) {
+  if (ss.getSheets().length <= 1) return;
+  ["工作表1", "Sheet1"].forEach(name => {
+    const s = ss.getSheetByName(name);
+    if (s) ss.deleteSheet(s);
+  });
+}
+
 function doPost(e) {
   try {
     let data;
@@ -119,7 +159,8 @@ function rebuildRemaining(data) {
   const year = parseInt(data.year, 10);
   const month = parseInt(data.month, 10);
   if (!year || !month) return res({ error: "缺少 year 或 month" });
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = findMonthlySpreadsheet(year, month);
+  if (!ss) return res({ error: "找不到該月份的報名表檔案" });
   buildRemainingSheet(ss, year, month);
   return res({ success: true, year, month });
 }
@@ -151,7 +192,8 @@ function savePassword(password) {
 
 // ── 取得報名資料（從總表）──
 function getRegs(data) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = findMonthlySpreadsheet(data.year, data.month);
+  if (!ss) return res({ regs: [] });
   const sheetName = `${data.year}年${data.month}月總表`;
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return res({ regs: [] });
@@ -170,9 +212,9 @@ function getRegs(data) {
 
 // ── 新增報名 ──
 function addReg(data) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
   const year = data.year;
   const month = data.month;
+  const ss = getMonthlySpreadsheet(year, month);
 
   // 確保所有工作表存在
   ensureAllSheets(ss, year, month);
@@ -251,9 +293,10 @@ function updateReg(data) {
 
 // ── 刪除報名 ──
 function deleteReg(data) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
   const year = data.year;
   const month = data.month;
+  const ss = findMonthlySpreadsheet(year, month);
+  if (!ss) return res({ error: "找不到該月份的報名表檔案" });
 
   // 從總表找姓名
   const summarySheet = ss.getSheetByName(`${year}年${month}月總表`);
@@ -327,6 +370,9 @@ function ensureAllSheets(ss, year, month) {
   if (!ss.getSheetByName(`${year}年${month}月${REMAIN_SHEET_SUFFIX}`)) {
     buildRemainingSheet(ss, year, month);
   }
+
+  // 新檔案會多一個預設空白分頁，清掉它
+  removeDefaultSheet(ss);
 }
 
 // ── 統計各場次目前已報名人數 ──
