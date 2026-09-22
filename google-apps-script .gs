@@ -519,41 +519,6 @@ function formatHeader(sheet, row, cols, color) {
   sheet.setFrozenRows(1);
 }
 
-// ── 一次性搬遷用：把「運動」檔案裡指定年月的舊分頁搬到專屬檔案 ──
-// 用法：Apps Script 編輯器上方函式下拉選單選 migrateOct2026，按執行（第一次會要求授權 Drive 權限）
-function migrateMonthToOwnFile(year, month) {
-  const oldSs = SpreadsheetApp.openById(SHEET_ID);
-  const newSs = getMonthlySpreadsheet(year, month);
-
-  const names = [
-    `${year}年${month}月總表`,
-    `${year}年${month}月瑜伽`,
-    `${year}年${month}月羽球`,
-    `${year}年${month}月網球`,
-    `${year}年${month}月${REMAIN_SHEET_SUFFIX}`,
-  ];
-
-  const migrated = [];
-  names.forEach(name => {
-    const oldSheet = oldSs.getSheetByName(name);
-    if (!oldSheet) return;
-    if (newSs.getSheetByName(name)) return; // 新檔案已有同名分頁，跳過避免覆蓋
-
-    const copied = oldSheet.copyTo(newSs);
-    copied.setName(name);
-    oldSs.deleteSheet(oldSheet);
-    migrated.push(name);
-  });
-
-  removeDefaultSheet(newSs);
-  Logger.log("搬遷完成：" + migrated.join("、"));
-  return migrated;
-}
-
-function migrateOct2026() {
-  migrateMonthToOwnFile(2026, 10);
-}
-
 function res(data) {
   const output = ContentService
     .createTextOutput(JSON.stringify(data))
